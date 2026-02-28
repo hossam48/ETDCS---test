@@ -1,0 +1,151 @@
+# =============================================================================
+# docker-compose.yml - ETDCS Container Orchestration
+# Task 14 - Docker Deployment
+# =============================================================================
+# Usage:
+#   Development (SQLite only):
+#     docker-compose up app
+#
+#   Full stack with PostgreSQL:
+#     docker-compose up
+#
+#   With pgAdmin tools:
+#     docker-compose --profile tools up
+#
+#   Production:
+#     POSTGRES_PASS=your_secure_password docker-compose up -d
+# =============================================================================
+
+version: "3.8"
+
+# =============================================================================
+# SERVICES
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # APP SERVICE - Streamlit Application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: etdcs:latest
+    container_name: etdcs-app
+    
+    ports:
+      - "8501:8501"
+    
+    volumes:
+      # Persist SQLite database
+      - ./database:/app/database
+      # Persist uploaded files
+      - ./files:/app/files
+      # Persist generated reports
+      - ./files/reports:/app/files/reports
+    
+    environment:
+      # PostgreSQL connection (for future migration)
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=etdcs
+      - POSTGRES_USER=etdcs_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASS:-}
+      # Application settings
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - STREAMLIT_SERVER_HEADLESS=true
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # POSTGRES SERVICE - Database (Future Migration Target)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: etdcs-postgres
+    
+    environment:
+      POSTGRES_DB: etdcs
+      POSTGRES_USER: etdcs_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASS:-etdcs_secret}
+      # Performance tuning
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C.UTF-8"
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Schema initialization (optional - for fresh installs)
+      # - ./database/schema_postgresql.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etdcs_user -d etdcs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    restart: unless-stopped
+    
+    # Expose only to internal network (app can connect)
+    # Uncomment to expose to host for debugging
+    # ports:
+    #   - "5432:5432"
+
+  # ---------------------------------------------------------------------------
+  # PGADMIN SERVICE - Database Management UI (Optional)
+  # ---------------------------------------------------------------------------
+  # Only runs when explicitly requested with --profile tools
+  # Usage: docker-compose --profile tools up pgadmin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: etdcs-pgadmin
+    
+    profiles:
+      - tools
+    
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@elsewedy.com
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASS:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    
+    ports:
+      - "5050:80"
+    
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    
+    depends_on:
+      - postgres
+    
+    restart: unless-stopped
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  # PostgreSQL persistent data
+  postgres_data:
+    driver: local
+  
+  # pgAdmin persistent data (settings, saved connections)
+  pgadmin_data:
+    driver: local
+
+# =============================================================================
+# NETWORKS (Optional - default network is created automatically)
+# =============================================================================
+# networks:
+#   etdcs-network:
+#     driver: bridge
